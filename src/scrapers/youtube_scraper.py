@@ -67,79 +67,141 @@ class YouTubeScraper:
         except Exception as e:
             raise YouTubeScrapingError(f"Failed to navigate to Shorts: {str(e)}")
     
-    def set_sort_mode(self, mode: str = "Popular"):
-        """Set the sort mode for videos"""
+    def set_sort_mode(self, mode: str = "Popular", page_load_timeout: int = 10):
+        """Set the sort mode for videos using JavaScript to find and click the chip button
+        
+        Args:
+            mode: Sort mode to select (Popular, Latest, Oldest)
+            page_load_timeout: Timeout in seconds to wait for page loading (from GUI settings)
+        """
+        import time
+        
         try:
-            # Wait for the sort button/dropdown to appear
+            # Wait for chip buttons to appear
             try:
-                WebDriverWait(self.browser.driver, 5).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label*='Sort'], button[aria-label*='Filter'], yt-chip-cloud-chip-renderer, #filter-button"))
+                WebDriverWait(self.browser.driver, page_load_timeout).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "yt-chip-cloud-chip-renderer"))
                 )
             except:
-                pass  # Continue even if sort button not found
+                pass
             
-            # Try to find and click the filter/sort button
-            # YouTube's UI may vary, so we try multiple selectors
-            sort_selectors = [
-                "button[aria-label*='Sort']",
-                "button[aria-label*='Filter']",
-                "yt-chip-cloud-chip-renderer",
-                "#filter-button",
-            ]
+            # Wait for page to fully load (use half of page_load_timeout)
+            wait_time = max(1, page_load_timeout // 3)
+            time.sleep(wait_time)
             
-            sort_clicked = False
-            for selector in sort_selectors:
-                try:
-                    elements = self.browser.find_elements(By.CSS_SELECTOR, selector)
-                    if elements and elements[0].is_displayed():
-                        self.browser.execute_script("arguments[0].click();", elements[0])
-                        sort_clicked = True
-                        # Wait for dropdown/menu to appear
-                        try:
-                            WebDriverWait(self.browser.driver, 3).until(
-                                EC.presence_of_element_located((By.CSS_SELECTOR, "yt-formatted-string, *[aria-label*='Popular']"))
-                            )
-                        except:
-                            pass
-                        break
-                except:
-                    continue
-            
-            if not sort_clicked:
-                # Try scrolling to trigger lazy loading
-                self.browser.execute_script("window.scrollTo(0, 500);")
-                # Wait for scroll to complete
-                WebDriverWait(self.browser.driver, 2).until(
-                    lambda d: d.execute_script('return document.readyState') == 'complete'
-                )
-            
-            # If mode is Popular, try to select it
-            if mode == "Popular" and sort_clicked:
-                # Look for "Most popular" or similar option
-                popular_selectors = [
-                    "yt-formatted-string",
-                    "*[aria-label*='Popular']",
-                ]
+            # Use JavaScript to find and click the button with the matching text
+            # This directly searches for the div.ytChipShapeChip containing the mode text
+            # and then clicks its parent button
+            js_click_chip = f"""
+            (function() {{
+                // Find all chip divs
+                var chipDivs = document.querySelectorAll('div.ytChipShapeChip');
                 
-                for selector in popular_selectors:
-                    try:
-                        elements = self.browser.find_elements(By.CSS_SELECTOR, selector)
-                        for elem in elements:
-                            if elem.is_displayed() and ('popular' in elem.text.lower() or 'most viewed' in elem.text.lower()):
-                                self.browser.execute_script("arguments[0].click();", elem)
-                                # Wait for sort to apply
-                                try:
-                                    WebDriverWait(self.browser.driver, 3).until(
-                                        lambda d: d.execute_script('return document.readyState') == 'complete'
-                                    )
-                                except:
-                                    pass
-                                return
-                    except:
-                        continue
+                for (var i = 0; i < chipDivs.length; i++) {{
+                    var div = chipDivs[i];
+                    var text = div.textContent || div.innerText;
+                    text = text.trim().toLowerCase();
+                    
+                    if (text === '{mode.lower()}') {{
+                        // Found the chip, now find and click the parent button
+                        var button = div.closest('button');
+                        if (button) {{
+                            button.scrollIntoView({{block: 'center'}});
+                            button.click();
+                            return 'clicked: ' + text;
+                        }}
+                    }}
+                }}
+                
+                // Try alternative: find yt-chip-cloud-chip-renderer elements
+                var renderers = document.querySelectorAll('yt-chip-cloud-chip-renderer');
+                for (var j = 0; j < renderers.length; j++) {{
+                    var renderer = renderers[j];
+                    var text = renderer.textContent || renderer.innerText;
+                    text = text.trim().toLowerCase();
+                    
+                    if (text === '{mode.lower()}') {{
+                        var button = renderer.querySelector('button');
+                        if (button) {{
+                            button.scrollIntoView({{block: 'center'}});
+                            button.click();
+                            return 'clicked via renderer: ' + text;
+                        }}
+                    }}
+                }}
+                
+                // Last try: find any button with role="tab" containing the text
+                var buttons = document.querySelectorAll('button[role="tab"]');
+                for (var k = 0; k < buttons.length; k++) {{
+                    var btn = buttons[k];
+                    var text = btn.textContent || btn.innerText;
+                    text = text.trim().toLowerCase();
+                    
+                    if (text === '{mode.lower()}') {{
+                        btn.scrollIntoView({{block: 'center'}});
+                        btn.click();
+                        return 'clicked via tab button: ' + text;
+                    }}
+                }}
+                
+                return 'not found';
+            }})();
+            """
+            
+            result = self.browser.execute_script(js_click_chip)
+            print(f"JavaScript chip click result: {result}")
+            
+            if result and 'clicked' in str(result):
+                print(f"Successfully clicked on '{mode}' chip")
+                print(f"Waiting for page to reload after sort change (timeout: {page_load_timeout}s)...")
+                
+                # Calculate wait times based on page_load_timeout
+                initial_wait = max(1, page_load_timeout // 5)  # 20% of timeout
+                video_wait = max(2, page_load_timeout // 3)    # 33% of timeout
+                final_wait = max(1, page_load_timeout // 5)    # 20% of timeout
+                
+                # Wait for page to reload with new sorted content
+                time.sleep(initial_wait)
+                
+                # Wait for document to be ready
+                try:
+                    WebDriverWait(self.browser.driver, page_load_timeout).until(
+                        lambda d: d.execute_script('return document.readyState') == 'complete'
+                    )
+                except:
+                    pass
+                
+                # Additional wait for videos to load after sorting
+                time.sleep(video_wait)
+                
+                # Wait for video elements to appear
+                try:
+                    WebDriverWait(self.browser.driver, page_load_timeout).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/shorts/']"))
+                    )
+                except:
+                    pass
+                
+                # Final wait to ensure all content is loaded
+                time.sleep(final_wait)
+                print(f"Sort mode '{mode}' applied and page reloaded")
+            else:
+                print(f"Warning: Could not find '{mode}' chip button")
+                # Debug: print all chip texts found
+                debug_js = """
+                (function() {
+                    var texts = [];
+                    var chipDivs = document.querySelectorAll('div.ytChipShapeChip');
+                    for (var i = 0; i < chipDivs.length; i++) {
+                        texts.push(chipDivs[i].textContent.trim());
+                    }
+                    return texts;
+                })();
+                """
+                chip_texts = self.browser.execute_script(debug_js)
+                print(f"Available chip texts: {chip_texts}")
             
         except Exception as e:
-            # If sorting fails, continue anyway - videos might already be sorted
             print(f"Warning: Could not set sort mode: {str(e)}")
     
     def extract_video_links(self, count: int = 10) -> List[str]:
@@ -310,7 +372,7 @@ class YouTubeScraper:
             # Set sort mode
             if progress_callback:
                 progress_callback(f"Setting sort mode to {config.sort_mode}...")
-            self.set_sort_mode(config.sort_mode)
+            self.set_sort_mode(config.sort_mode, config.page_load_timeout)
             
             # Extract video links
             if progress_callback:
