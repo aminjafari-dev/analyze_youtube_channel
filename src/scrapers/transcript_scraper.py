@@ -1,5 +1,6 @@
 """Transcript scraper for extracting transcripts from tubetranscript.com"""
 
+import time
 from typing import Optional
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -80,63 +81,92 @@ class TranscriptScraper:
                     pass  # Continue even if value not set immediately
                 
                 # Find and click the generate button
-                button_selectors = [
-                    "button:contains('Generate')",
-                    "button:contains('Transcribe')",
-                    "button[type='submit']",
-                    "input[type='submit']",
-                    "button.btn-primary",
-                    "button[class*='generate']",
-                    "button[class*='submit']",
-                ]
-                
                 button_clicked = False
-                for selector in button_selectors:
+                
+                # First try: Direct selector for tubetranscript.com button
+                try:
+                    # The exact button on tubetranscript.com
+                    btn = self.browser.driver.find_element(By.CSS_SELECTOR, "button.btn-activecolor[type='submit']")
+                    if btn.is_displayed() and btn.is_enabled():
+                        self.browser.execute_script("arguments[0].click();", btn)
+                        button_clicked = True
+                        if progress_callback:
+                            progress_callback("Clicked Generate Transcript button")
+                except:
+                    pass
+                
+                # Second try: Any button with "Generate Transcript" text
+                if not button_clicked:
                     try:
-                        # Try CSS selector first
-                        if 'contains' not in selector:
+                        buttons = self.browser.find_elements(By.XPATH, "//button[contains(text(), 'Generate Transcript')]")
+                        for btn in buttons:
+                            if btn.is_displayed() and btn.is_enabled():
+                                self.browser.execute_script("arguments[0].click();", btn)
+                                button_clicked = True
+                                if progress_callback:
+                                    progress_callback("Clicked Generate Transcript button")
+                                break
+                    except:
+                        pass
+                
+                # Third try: Generic button selectors
+                if not button_clicked:
+                    button_selectors = [
+                        "button.btn-activecolor",
+                        "button[type='submit']",
+                        "input[type='submit']",
+                        "button.btn-primary",
+                    ]
+                    
+                    for selector in button_selectors:
+                        try:
                             buttons = self.browser.find_elements(By.CSS_SELECTOR, selector)
                             for btn in buttons:
                                 if btn.is_displayed() and btn.is_enabled():
                                     btn_text = btn.text.lower()
-                                    if 'generate' in btn_text or 'transcribe' in btn_text or 'submit' in btn_text:
+                                    if 'generate' in btn_text or 'transcript' in btn_text:
                                         self.browser.execute_script("arguments[0].click();", btn)
                                         button_clicked = True
+                                        if progress_callback:
+                                            progress_callback("Clicked Generate Transcript button")
                                         break
-                        if button_clicked:
-                            break
-                    except:
-                        continue
-                
-                # If CSS selectors didn't work, try XPath
-                if not button_clicked:
-                    try:
-                        buttons = self.browser.find_elements(By.XPATH, "//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'generate')]")
-                        if not buttons:
-                            buttons = self.browser.find_elements(By.XPATH, "//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'transcribe')]")
-                        if buttons:
-                            for btn in buttons:
-                                if btn.is_displayed() and btn.is_enabled():
-                                    self.browser.execute_script("arguments[0].click();", btn)
-                                    button_clicked = True
-                                    break
-                    except:
-                        pass
+                            if button_clicked:
+                                break
+                        except:
+                            continue
                 
                 if not button_clicked:
                     raise TranscriptScrapingError("Could not find generate/transcribe button")
                 
-                # Wait for transcript to be generated - wait for page to process
-                try:
-                    # Wait for page to start processing (any change in DOM)
-                    WebDriverWait(self.browser.driver, 5).until(
-                        lambda d: d.execute_script('return document.readyState') == 'complete'
-                    )
-                except:
-                    pass
+                if progress_callback:
+                    progress_callback("Waiting for transcript to be generated...")
                 
-                # Look for transcript text
+                # Wait for loading to start (page URL changes or loading indicator appears)
+                time.sleep(2)  # Initial wait for page to start processing
+                
+                # Wait for loading indicator to disappear (tubetranscript.com shows percentage)
+                max_wait_time = 120  # Maximum 2 minutes for transcript generation
+                start_time = time.time()
+                
+                # First, wait for loading to complete by checking for loading indicators
+                try:
+                    # Wait until loading indicator disappears
+                    WebDriverWait(self.browser.driver, max_wait_time).until(
+                        lambda d: not d.find_elements(By.XPATH, "//*[contains(text(), 'Loading')]") or
+                                  len([e for e in d.find_elements(By.XPATH, "//*[contains(text(), 'Loading')]") if e.is_displayed()]) == 0
+                    )
+                except TimeoutException:
+                    if progress_callback:
+                        progress_callback("Loading timeout, trying to extract transcript anyway...")
+                
+                # Additional wait for content to fully render
+                time.sleep(2)
+                
+                # Look for transcript text - using selectors specific to tubetranscript.com
                 transcript_selectors = [
+                    "div.card-body",  # Main content area in tubetranscript
+                    "[class*='transcript-content']",
+                    "[class*='transcript-text']",
                     "#transcript",
                     ".transcript",
                     "[class*='transcript']",
@@ -148,38 +178,81 @@ class TranscriptScraper:
                 ]
                 
                 transcript_text = None
-                max_wait_time = self.browser.page_load_timeout  # Use browser timeout setting
-                wait_interval = 2
                 
-                # Wait for transcript to appear with intelligent polling
-                try:
-                    WebDriverWait(self.browser.driver, max_wait_time).until(
-                        lambda d: any(
-                            elem.text.strip() and len(elem.text.strip()) > 50
-                            and not any(error_word in elem.text.strip().lower() for error_word in ['error', 'not found', 'unavailable', 'failed'])
-                            for selector in transcript_selectors
-                            for elem in d.find_elements(By.CSS_SELECTOR, selector)
-                            if elem.is_displayed()
-                        )
-                    )
-                    # Now extract the transcript
+                # Poll for transcript content to appear
+                poll_attempts = 30  # Try for 60 seconds total (2 seconds each)
+                for poll in range(poll_attempts):
+                    # Try to find transcript content
                     for selector in transcript_selectors:
                         try:
                             elements = self.browser.find_elements(By.CSS_SELECTOR, selector)
                             for elem in elements:
                                 if elem.is_displayed():
                                     text = elem.text.strip()
+                                    # Transcript should be substantial and not error messages
                                     if text and len(text) > 50:
-                                        if not any(error_word in text.lower() for error_word in ['error', 'not found', 'unavailable', 'failed']):
-                                            transcript_text = text
+                                        # Skip if it's just UI elements
+                                        if any(skip_word in text.lower() for skip_word in 
+                                               ['generate transcript', 'install on chrome', 'extension for quick']):
+                                            continue
+                                        # Skip if it contains error indicators
+                                        if any(error_word in text.lower() for error_word in 
+                                               ['error', 'not found', 'unavailable', 'failed', 'try again']):
+                                            continue
+                                        # Clean the transcript text - remove timestamps like "00:00"
+                                        lines = text.split('\n')
+                                        clean_lines = []
+                                        for line in lines:
+                                            line = line.strip()
+                                            # Skip timestamp-only lines and button labels
+                                            if line and not line.startswith('00:') and line not in ['Copy', 'Copy with timestamps', 'Download', 'Transcript', 'Summary']:
+                                                clean_lines.append(line)
+                                        if clean_lines:
+                                            transcript_text = ' '.join(clean_lines)
                                             break
                             if transcript_text:
                                 break
                         except:
                             continue
-                except TimeoutException:
-                    # Transcript didn't appear within timeout
-                    pass
+                    
+                    if transcript_text:
+                        break
+                    
+                    # Check if still loading
+                    loading_elements = self.browser.find_elements(By.XPATH, "//*[contains(text(), '%') and contains(@class, 'progress') or contains(text(), 'Loading')]")
+                    if loading_elements:
+                        visible_loading = [e for e in loading_elements if e.is_displayed()]
+                        if visible_loading:
+                            if progress_callback:
+                                try:
+                                    progress_callback(f"Still loading... {visible_loading[0].text}")
+                                except:
+                                    pass
+                    
+                    time.sleep(2)
+                
+                # If selectors didn't work, try to get text from the main content area
+                if not transcript_text:
+                    try:
+                        # Look for the card-body which contains the transcript on tubetranscript.com
+                        card_bodies = self.browser.find_elements(By.CSS_SELECTOR, ".card-body, .transcript-container, [role='main']")
+                        for card in card_bodies:
+                            if card.is_displayed():
+                                text = card.text.strip()
+                                if text and len(text) > 100:
+                                    # Remove common UI elements
+                                    lines = text.split('\n')
+                                    clean_lines = []
+                                    for line in lines:
+                                        line = line.strip()
+                                        if line and line not in ['Copy', 'Copy with timestamps', 'Download', 'Transcript', 'Summary', 'Loading']:
+                                            if not line.startswith('00:') and '%' not in line:
+                                                clean_lines.append(line)
+                                    if clean_lines and len(' '.join(clean_lines)) > 50:
+                                        transcript_text = ' '.join(clean_lines)
+                                        break
+                    except:
+                        pass
                 
                 # Close the transcript tab
                 self.browser.close_current_tab()
