@@ -1,7 +1,6 @@
 """Browser automation manager using Selenium"""
 
-import os
-import pickle
+import time
 from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -12,12 +11,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 
-from src.utils.config import (
-    BROWSER_HEADLESS,
-    BROWSER_TIMEOUT,
-    BROWSER_IMPLICIT_WAIT,
-    YOUTUBE_BASE_URL
-)
+from src.utils.config import BROWSER_HEADLESS, BROWSER_TIMEOUT
 from src.exceptions.custom_exceptions import BrowserError
 
 
@@ -48,28 +42,61 @@ class BrowserManager:
             # Use webdriver-manager to automatically handle ChromeDriver
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            self.driver.implicitly_wait(BROWSER_IMPLICIT_WAIT)
+            # Use short implicit wait - we use explicit waits instead
+            self.driver.implicitly_wait(1)
             self.driver.maximize_window()
         except Exception as e:
             raise BrowserError(f"Failed to initialize browser: {str(e)}")
+    
+    def _is_page_usable(self):
+        """
+        Check if page has enough content to be usable.
+        Returns True when DOM is interactive and has links/text.
+        """
+        try:
+            # Check if DOM is at least interactive (not loading)
+            ready_state = self.driver.execute_script('return document.readyState')
+            if ready_state == 'loading':
+                return False
+            
+            # Check if page has links or text content
+            has_content = self.driver.execute_script('''
+                // Check for any links
+                var links = document.querySelectorAll('a[href]');
+                if (links.length > 0) return true;
+                
+                // Check for text content
+                var body = document.body;
+                if (body && body.innerText && body.innerText.trim().length > 50) return true;
+                
+                return false;
+            ''')
+            return has_content
+        except:
+            return False
     
     def navigate(self, url: str):
         """Navigate to a URL"""
         try:
             self.driver.get(url)
-            # Wait for page to be ready
-            WebDriverWait(self.driver, self.page_load_timeout).until(
-                lambda d: d.execute_script('return document.readyState') == 'complete'
-            )
+            self._wait_until_usable()
         except Exception as e:
             raise BrowserError(f"Failed to navigate to {url}: {str(e)}")
+    
+    def _wait_until_usable(self):
+        """Wait until page is usable (has links/text)"""
+        start_time = time.time()
+        while time.time() - start_time < self.page_load_timeout:
+            if self._is_page_usable():
+                return
+            time.sleep(0.2)
     
     def wait_for_element(self, by: By, value: str, timeout: int = None):
         """Wait for an element to be present"""
         if timeout is None:
             timeout = self.page_load_timeout
         try:
-            wait = WebDriverWait(self.driver, timeout)
+            wait = WebDriverWait(self.driver, timeout, poll_frequency=0.2)
             return wait.until(EC.presence_of_element_located((by, value)))
         except TimeoutException:
             raise BrowserError(f"Element not found: {by}={value}")
@@ -79,15 +106,14 @@ class BrowserManager:
         if timeout is None:
             timeout = self.page_load_timeout
         try:
-            wait = WebDriverWait(self.driver, timeout)
+            wait = WebDriverWait(self.driver, timeout, poll_frequency=0.2)
             return wait.until(EC.element_to_be_clickable((by, value)))
         except TimeoutException:
             raise BrowserError(f"Element not clickable: {by}={value}")
     
     def wait_for_page_load(self, timeout: int = None, wait_for_elements: list = None):
         """
-        Wait for page to be fully loaded and optionally for specific elements to appear.
-        This is the main function for waiting - no time.sleep is used.
+        Wait for page to be usable (links and text visible).
         
         Args:
             timeout: Maximum time to wait (uses instance default if None)
@@ -95,41 +121,33 @@ class BrowserManager:
         """
         if timeout is None:
             timeout = self.page_load_timeout
-        try:
-            wait = WebDriverWait(self.driver, timeout)
-            
-            # First wait for document ready state
-            wait.until(lambda d: d.execute_script('return document.readyState') == 'complete')
-            
-            # If specific elements are requested, wait for at least one to appear
-            if wait_for_elements:
-                def any_element_present(driver):
-                    for selector in wait_for_elements:
-                        try:
-                            elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                            if elements and any(elem.is_displayed() for elem in elements):
-                                return True
-                        except:
-                            continue
-                    return False
-                
-                wait.until(any_element_present)
-            
-            # Additional check: wait for jQuery (if present) to be ready
-            try:
-                wait.until(lambda d: d.execute_script('return typeof jQuery === "undefined" || jQuery.active === 0'))
-            except:
-                pass  # jQuery might not be present, that's okay
-            
-        except TimeoutException:
-            raise BrowserError("Page did not load within timeout")
+        
+        start_time = time.time()
+        
+        # Wait until page is usable
+        while time.time() - start_time < timeout:
+            if self._is_page_usable():
+                break
+            time.sleep(0.2)
+        
+        # If specific elements requested, wait for them
+        if wait_for_elements:
+            while time.time() - start_time < timeout:
+                for selector in wait_for_elements:
+                    try:
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        if elements:
+                            return
+                    except:
+                        continue
+                time.sleep(0.2)
     
     def wait_for_element_visible(self, by: By, value: str, timeout: int = None):
         """Wait for an element to be visible"""
         if timeout is None:
             timeout = self.page_load_timeout
         try:
-            wait = WebDriverWait(self.driver, timeout)
+            wait = WebDriverWait(self.driver, timeout, poll_frequency=0.2)
             return wait.until(EC.visibility_of_element_located((by, value)))
         except TimeoutException:
             raise BrowserError(f"Element not visible: {by}={value}")
@@ -153,13 +171,7 @@ class BrowserManager:
         try:
             element = self.wait_for_clickable(by, value)
             self.driver.execute_script("arguments[0].click();", element)
-            # Wait for any potential page changes after click
-            WebDriverWait(self.driver, 2).until(
-                lambda d: d.execute_script('return document.readyState') == 'complete'
-            )
-        except TimeoutException:
-            # If page doesn't change, that's okay
-            pass
+            time.sleep(0.3)
         except Exception as e:
             raise BrowserError(f"Failed to click element: {by}={value}, Error: {str(e)}")
     
@@ -169,7 +181,6 @@ class BrowserManager:
             element = self.wait_for_element(by, value)
             element.clear()
             element.send_keys(text)
-            # Wait briefly for input to be processed (no page load needed)
         except Exception as e:
             raise BrowserError(f"Failed to send keys: {by}={value}, Error: {str(e)}")
     
@@ -231,4 +242,3 @@ class BrowserManager:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit"""
         self.close()
-

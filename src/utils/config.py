@@ -2,8 +2,7 @@
 
 # Browser settings
 BROWSER_HEADLESS = False
-BROWSER_TIMEOUT = 30  # seconds
-BROWSER_IMPLICIT_WAIT = 10  # seconds
+BROWSER_TIMEOUT = 10  # seconds - default page load timeout
 
 # Scraping settings
 DEFAULT_RETRY_ATTEMPTS = 3

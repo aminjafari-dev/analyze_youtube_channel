@@ -57,14 +57,13 @@ class YouTubeScraper:
             shorts_url = self.get_channel_shorts_url(channel_url)
             self.browser.navigate(shorts_url)
             # Wait for page to load - check for video elements or channel name
-            try:
-                WebDriverWait(self.browser.driver, 10).until(
-                    lambda d: len(d.find_elements(By.CSS_SELECTOR, "a[href*='/shorts/'], a[href*='/watch?v=']")) > 0
-                    or d.find_elements(By.CSS_SELECTOR, "#channel-name, ytd-channel-name")
-                )
-            except:
-                # If specific elements not found, at least wait for page ready
-                self.browser.wait_for_page_load()
+            video_selectors = [
+                "a[href*='/shorts/']",
+                "a[href*='/watch?v=']",
+                "#channel-name",
+                "ytd-channel-name"
+            ]
+            self.browser.wait_for_page_load(wait_for_elements=video_selectors)
         except Exception as e:
             raise YouTubeScrapingError(f"Failed to navigate to Shorts: {str(e)}")
     
@@ -245,7 +244,7 @@ class YouTubeScraper:
             self.browser.navigate(video_url)
             # Wait for video page to load - check for title element
             try:
-                WebDriverWait(self.browser.driver, 10).until(
+                WebDriverWait(self.browser.driver, self.browser.page_load_timeout).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "h1.ytd-watch-metadata yt-formatted-string, h1 yt-formatted-string"))
                 )
             except:

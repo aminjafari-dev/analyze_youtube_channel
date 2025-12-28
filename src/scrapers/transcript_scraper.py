@@ -31,7 +31,7 @@ class TranscriptScraper:
                 self.browser.open_new_tab(TRANSCRIPT_SERVICE_URL)
                 # Wait for page to load and input field to appear
                 try:
-                    WebDriverWait(self.browser.driver, 10).until(
+                    WebDriverWait(self.browser.driver, self.browser.page_load_timeout).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='text'], input[placeholder*='YouTube'], input[placeholder*='youtube.com'], input[name*='url'], input[id*='url'], #url"))
                     )
                 except:
@@ -148,7 +148,7 @@ class TranscriptScraper:
                 ]
                 
                 transcript_text = None
-                max_wait_time = 30  # Maximum wait time in seconds
+                max_wait_time = self.browser.page_load_timeout  # Use browser timeout setting
                 wait_interval = 2
                 
                 # Wait for transcript to appear with intelligent polling
