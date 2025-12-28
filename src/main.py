@@ -12,6 +12,7 @@ if str(project_root) not in sys.path:
 
 from src.gui.main_window import MainWindow
 from src.utils.browser_manager import BrowserManager
+from src.utils.youtube_auth import YouTubeAuthManager
 from src.scrapers.youtube_scraper import YouTubeScraper
 from src.scrapers.transcript_scraper import TranscriptScraper
 from src.data.excel_handler import ExcelHandler
@@ -26,6 +27,7 @@ class YouTubeChannelAnalyzer:
         """Initialize analyzer"""
         self.gui = gui_window
         self.browser = None
+        self.auth_manager = None
         self.youtube_scraper = None
         self.transcript_scraper = None
     
@@ -39,7 +41,10 @@ class YouTubeChannelAnalyzer:
             if self.gui.should_stop():
                 return
             
-            self.browser = BrowserManager(headless=False)
+            self.browser = BrowserManager(headless=False, page_load_timeout=config.page_load_timeout)
+            
+            # Initialize authentication manager
+            self.auth_manager = YouTubeAuthManager(self.browser)
             
             # Check and ensure YouTube login
             self.gui.log("Checking YouTube login status...")
@@ -53,9 +58,9 @@ class YouTubeChannelAnalyzer:
                 from tkinter import messagebox
                 messagebox.showinfo(title, message)
             
-            if not self.browser.ensure_youtube_login(
+            if not self.auth_manager.ensure_login(
                 progress_callback=self._progress_callback,
-                show_message_callback=lambda title, msg: self.gui.root.after(0, lambda: show_login_message(title, msg))
+                show_message_callback=lambda title, msg: self.gui.root.after(0, lambda t=title, m=msg: show_login_message(t, m))
             ):
                 self.gui.log("Login failed or cancelled. Please log in and try again.")
                 self.gui.root.after(0, lambda: self._show_error(
@@ -126,16 +131,24 @@ class YouTubeChannelAnalyzer:
             self.gui.root.after(0, lambda: self._show_success_message(filepath))
             
         except BrowserError as e:
-            self.gui.log(f"Browser error: {str(e)}")
-            self.gui.root.after(0, lambda: self._show_error("Browser Error", str(e)))
+            error_msg = str(e)
+            self.gui.log(f"Browser error: {error_msg}")
+            self.gui.root.after(0, lambda msg=error_msg: self._show_error("Browser Error", msg))
         except ScrapingError as e:
-            self.gui.log(f"Scraping error: {str(e)}")
-            self.gui.root.after(0, lambda: self._show_error("Scraping Error", str(e)))
+            error_msg = str(e)
+            self.gui.log(f"Scraping error: {error_msg}")
+            self.gui.root.after(0, lambda msg=error_msg: self._show_error("Scraping Error", msg))
         except Exception as e:
-            self.gui.log(f"Unexpected error: {str(e)}")
-            self.gui.root.after(0, lambda: self._show_error("Error", str(e)))
+            error_msg = str(e)
+            self.gui.log(f"Unexpected error: {error_msg}")
+            self.gui.root.after(0, lambda msg=error_msg: self._show_error("Error", msg))
         finally:
             # Cleanup
+            if self.auth_manager:
+                try:
+                    self.auth_manager.cleanup()
+                except:
+                    pass
             if self.browser:
                 try:
                     self.browser.close()

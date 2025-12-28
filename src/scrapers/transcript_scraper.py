@@ -198,13 +198,11 @@ class TranscriptScraper:
                     pass
                 
                 if attempt < retry_attempts - 1:
-                    # Wait before retry - use WebDriverWait for a brief delay
+                    # Wait before retry - ensure page is ready
                     try:
-                        WebDriverWait(self.browser.driver, retry_delay).until(
-                            lambda d: False  # This will timeout after retry_delay seconds
-                        )
-                    except TimeoutException:
-                        pass  # Expected timeout
+                        self.browser.wait_for_page_load(timeout=retry_delay)
+                    except:
+                        pass  # Continue even if page load check fails
                     continue
                 else:
                     if progress_callback:
@@ -232,13 +230,11 @@ class TranscriptScraper:
                 if progress_callback:
                     progress_callback(f"Error getting transcript: {str(e)}")
             
-            # Small delay between requests - wait for any pending operations
+            # Ensure page is ready before next request
             try:
-                WebDriverWait(self.browser.driver, 1).until(
-                    lambda d: d.execute_script('return document.readyState') == 'complete'
-                )
+                self.browser.wait_for_page_load(timeout=2)
             except:
-                pass
+                pass  # Continue even if page load check fails
         
         return videos
 

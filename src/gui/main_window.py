@@ -5,7 +5,7 @@ from tkinter import messagebox, filedialog
 import threading
 from typing import Optional, Callable
 
-from src.gui.components import LabeledEntry, LabeledCombobox, StyledButton, ScrollableText
+from src.gui.components import LabeledEntry, LabeledCombobox, LabeledSpinbox, StyledButton, ScrollableText
 from src.gui.styles import STYLES, COLOR_BACKGROUND
 from src.utils.config import WINDOW_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT
 from src.utils.validators import validate_youtube_url, validate_video_count
@@ -109,6 +109,16 @@ class MainWindow:
         )
         self.sort_mode_combo.set("Popular")
         
+        # Page load timeout selector
+        self.page_load_timeout_spinbox = LabeledSpinbox(
+            self.input_frame,
+            "Page Load Timeout (seconds):",
+            from_=1,
+            to=60,
+            default=10,
+            width=10
+        )
+        
         # Buttons frame
         self.buttons_frame = tk.Frame(self.input_frame, bg=COLOR_BACKGROUND)
         
@@ -193,7 +203,8 @@ class MainWindow:
         options_frame.pack(fill=tk.X, pady=(0, 15))
         
         self.video_count_combo.frame.pack(side=tk.LEFT, padx=(0, 20))
-        self.sort_mode_combo.frame.pack(side=tk.LEFT)
+        self.sort_mode_combo.frame.pack(side=tk.LEFT, padx=(0, 20))
+        self.page_load_timeout_spinbox.frame.pack(side=tk.LEFT)
         
         # Buttons
         self.buttons_frame.pack(fill=tk.X)
@@ -234,11 +245,21 @@ class MainWindow:
         
         sort_mode = self.sort_mode_combo.get()
         
+        try:
+            page_load_timeout = self.page_load_timeout_spinbox.get()
+            if page_load_timeout < 1 or page_load_timeout > 60:
+                messagebox.showerror("Error", "Page load timeout must be between 1 and 60 seconds")
+                return
+        except ValueError:
+            messagebox.showerror("Error", "Invalid page load timeout value")
+            return
+        
         # Create config
         config = ScrapingConfig(
             channel_url=channel_url,
             video_count=video_count,
-            sort_mode=sort_mode
+            sort_mode=sort_mode,
+            page_load_timeout=page_load_timeout
         )
         
         # Disable inputs and start button
@@ -280,6 +301,7 @@ class MainWindow:
         self.channel_url_entry.entry.config(fg='gray')
         self.video_count_combo.set("10")
         self.sort_mode_combo.set("Popular")
+        self.page_load_timeout_spinbox.set(10)
         self.log_text.clear()
         self.update_progress(0, "Ready")
     
@@ -303,10 +325,12 @@ class MainWindow:
             self.channel_url_entry.enable()
             self.video_count_combo.enable()
             self.sort_mode_combo.enable()
+            self.page_load_timeout_spinbox.enable()
         else:
             self.channel_url_entry.disable()
             self.video_count_combo.disable()
             self.sort_mode_combo.disable()
+            self.page_load_timeout_spinbox.disable()
     
     def log(self, message: str):
         """Add message to log"""

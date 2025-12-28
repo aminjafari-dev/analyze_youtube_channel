@@ -85,6 +85,55 @@ class LabeledCombobox:
         self.combobox.config(state='readonly')
 
 
+class LabeledSpinbox:
+    """Spinbox with label"""
+    
+    def __init__(self, parent, label_text: str, from_: int = 1, to: int = 100, 
+                 default: int = 10, width: int = 10, **kwargs):
+        self.frame = tk.Frame(parent, bg=STYLES['label']['bg'])
+        self.label = tk.Label(self.frame, text=label_text, **STYLES['label'])
+        self.spinbox = tk.Spinbox(
+            self.frame,
+            from_=from_,
+            to=to,
+            width=width,
+            **STYLES['entry']
+        )
+        self.spinbox.delete(0, tk.END)
+        self.spinbox.insert(0, str(default))
+        
+        self.label.pack(anchor='w', pady=(0, 5))
+        self.spinbox.pack(fill='x')
+    
+    def pack(self, **kwargs):
+        """Pack the component"""
+        self.frame.pack(**kwargs)
+    
+    def grid(self, **kwargs):
+        """Grid the component"""
+        self.frame.grid(**kwargs)
+    
+    def get(self) -> int:
+        """Get spinbox value as integer"""
+        try:
+            return int(self.spinbox.get())
+        except ValueError:
+            return 10  # Default value if invalid
+    
+    def set(self, value: int):
+        """Set spinbox value"""
+        self.spinbox.delete(0, tk.END)
+        self.spinbox.insert(0, str(value))
+    
+    def disable(self):
+        """Disable spinbox"""
+        self.spinbox.config(state='disabled')
+    
+    def enable(self):
+        """Enable spinbox"""
+        self.spinbox.config(state='normal')
+
+
 class StyledButton:
     """Styled button component"""
     

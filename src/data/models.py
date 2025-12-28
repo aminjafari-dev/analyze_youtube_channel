@@ -41,6 +41,7 @@ class ScrapingConfig:
     sort_mode: str = "Popular"  # Popular or Recent
     retry_attempts: int = 3
     retry_delay: int = 2  # seconds
+    page_load_timeout: int = 10  # seconds - maximum wait time for page loading
     
     def validate(self) -> bool:
         """Validate configuration"""
