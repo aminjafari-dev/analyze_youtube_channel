@@ -43,3 +43,9 @@ chromedriver.exe
 geckodriver.exe
 *.log
 
+# Sensitive files - NEVER commit these!
+youtube_cookies.pkl
+*.pkl
+cookies.txt
+*.cookies
+
