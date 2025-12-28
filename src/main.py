@@ -40,6 +40,36 @@ class YouTubeChannelAnalyzer:
                 return
             
             self.browser = BrowserManager(headless=False)
+            
+            # Check and ensure YouTube login
+            self.gui.log("Checking YouTube login status...")
+            self.gui.update_progress(8, "Checking YouTube login...")
+            
+            if self.gui.should_stop():
+                return
+            
+            def show_login_message(title, message):
+                """Show login message in GUI thread"""
+                from tkinter import messagebox
+                messagebox.showinfo(title, message)
+            
+            if not self.browser.ensure_youtube_login(
+                progress_callback=self._progress_callback,
+                show_message_callback=lambda title, msg: self.gui.root.after(0, lambda: show_login_message(title, msg))
+            ):
+                self.gui.log("Login failed or cancelled. Please log in and try again.")
+                self.gui.root.after(0, lambda: self._show_error(
+                    "Login Required", 
+                    "Please log in to YouTube in the browser window and try again."
+                ))
+                return
+            
+            self.gui.log("YouTube login verified. Starting analysis...")
+            self.gui.update_progress(10, "Login verified. Starting analysis...")
+            
+            if self.gui.should_stop():
+                return
+            
             self.youtube_scraper = YouTubeScraper(self.browser)
             self.transcript_scraper = TranscriptScraper(self.browser)
             

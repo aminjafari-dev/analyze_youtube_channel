@@ -1,5 +1,9 @@
 """Browser automation manager using Selenium"""
 
+import os
+import pickle
+import time
+from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -12,7 +16,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 from src.utils.config import (
     BROWSER_HEADLESS,
     BROWSER_TIMEOUT,
-    BROWSER_IMPLICIT_WAIT
+    BROWSER_IMPLICIT_WAIT,
+    YOUTUBE_BASE_URL
 )
 from src.exceptions.custom_exceptions import BrowserError
 
@@ -24,7 +29,9 @@ class BrowserManager:
         """Initialize browser manager"""
         self.driver = None
         self.headless = headless
+        self.cookies_file = Path(__file__).parent.parent.parent / "youtube_cookies.pkl"
         self._setup_driver()
+        self._load_cookies()
     
     def _setup_driver(self):
         """Setup Chrome WebDriver"""
@@ -172,10 +179,203 @@ class BrowserManager:
         except Exception as e:
             raise BrowserError(f"Failed to switch tab: {str(e)}")
     
+    def _load_cookies(self):
+        """Load saved cookies if they exist"""
+        try:
+            if self.cookies_file.exists() and self.driver:
+                # First navigate to YouTube to set the domain
+                self.driver.get(YOUTUBE_BASE_URL)
+                self.wait_for_page_load()
+                
+                # Load cookies
+                with open(self.cookies_file, 'rb') as f:
+                    cookies = pickle.load(f)
+                
+                # Add each cookie
+                for cookie in cookies:
+                    try:
+                        # Remove 'expiry' if it's too large (causes issues)
+                        if 'expiry' in cookie:
+                            # Check if expiry is a valid integer
+                            if isinstance(cookie['expiry'], (int, float)):
+                                self.driver.add_cookie(cookie)
+                            else:
+                                cookie_copy = cookie.copy()
+                                cookie_copy.pop('expiry', None)
+                                self.driver.add_cookie(cookie_copy)
+                        else:
+                            self.driver.add_cookie(cookie)
+                    except Exception as e:
+                        # Skip invalid cookies
+                        continue
+                
+                # Refresh to apply cookies
+                self.driver.refresh()
+                self.wait_for_page_load()
+        except Exception as e:
+            # If loading cookies fails, continue without them
+            pass
+    
+    def _save_cookies(self):
+        """Save current cookies to file"""
+        try:
+            if self.driver:
+                cookies = self.driver.get_cookies()
+                # Ensure directory exists
+                self.cookies_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.cookies_file, 'wb') as f:
+                    pickle.dump(cookies, f)
+        except Exception as e:
+            # If saving fails, continue without saving
+            pass
+    
+    def is_logged_in_youtube(self) -> bool:
+        """Check if user is logged in to YouTube"""
+        try:
+            if not self.driver:
+                return False
+            
+            # Navigate to YouTube homepage
+            self.navigate(YOUTUBE_BASE_URL)
+            self.wait_for_page_load()
+            
+            # Wait a bit for page to fully render
+            import time
+            time.sleep(2)
+            
+            # Check for login indicators
+            # If logged in, we should see profile picture or account menu
+            logged_in_indicators = [
+                "yt-img-shadow img[alt*='account']",  # Profile picture
+                "button[aria-label*='account']",  # Account button
+                "button#avatar-btn",  # Avatar button
+                "yt-img-shadow#avatar",  # Avatar image
+                "button[aria-label*='Google Account']",  # Google account button
+            ]
+            
+            for selector in logged_in_indicators:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements and any(elem.is_displayed() for elem in elements):
+                        return True
+                except:
+                    continue
+            
+            # Also check if we can see "Sign in" button (means not logged in)
+            sign_in_selectors = [
+                "a[aria-label*='Sign in']",
+                "button[aria-label*='Sign in']",
+                "yt-button-shape a[href*='accounts.google.com']",
+            ]
+            
+            for selector in sign_in_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements and any(elem.is_displayed() for elem in elements):
+                        return False
+                except:
+                    continue
+            
+            # If we can't determine, assume not logged in
+            return False
+            
+        except Exception as e:
+            # If check fails, assume not logged in
+            return False
+    
+    def ensure_youtube_login(self, progress_callback=None, show_message_callback=None):
+        """Ensure user is logged in to YouTube, show login page if not"""
+        try:
+            if progress_callback:
+                progress_callback("Checking YouTube login status...")
+            
+            # Check if already logged in
+            if self.is_logged_in_youtube():
+                if progress_callback:
+                    progress_callback("Already logged in to YouTube")
+                self._save_cookies()
+                return True
+            
+            # Not logged in, show login page
+            if progress_callback:
+                progress_callback("Not logged in. Opening login page...")
+            
+            # Show message to user
+            if show_message_callback:
+                show_message_callback(
+                    "Login Required",
+                    "Please log in to YouTube in the browser window.\n\n"
+                    "The browser will wait for you to complete the login process.\n"
+                    "After logging in, the analysis will continue automatically."
+                )
+            
+            # Navigate to YouTube homepage (better than /signin as it redirects properly)
+            self.navigate(YOUTUBE_BASE_URL)
+            self.wait_for_page_load()
+            
+            # Try to click sign in button if visible
+            try:
+                sign_in_selectors = [
+                    "a[aria-label*='Sign in']",
+                    "button[aria-label*='Sign in']",
+                    "yt-button-shape a[href*='accounts.google.com']",
+                    "a[href*='/ServiceLogin']",
+                ]
+                
+                for selector in sign_in_selectors:
+                    try:
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            if elem.is_displayed():
+                                self.driver.execute_script("arguments[0].click();", elem)
+                                self.wait_for_page_load()
+                                break
+                    except:
+                        continue
+            except:
+                pass  # If clicking sign in fails, user can navigate manually
+            
+            # Wait for user to log in manually
+            # Check every 3 seconds if user has logged in
+            max_wait_time = 300  # 5 minutes max wait
+            check_interval = 3  # Check every 3 seconds
+            elapsed_time = 0
+            
+            if progress_callback:
+                progress_callback("Waiting for you to log in in the browser window...")
+            
+            while elapsed_time < max_wait_time:
+                time.sleep(check_interval)
+                elapsed_time += check_interval
+                
+                # Check if logged in now
+                if self.is_logged_in_youtube():
+                    if progress_callback:
+                        progress_callback("Login successful! Saving session...")
+                    self._save_cookies()
+                    return True
+                
+                # Update progress message
+                if progress_callback and elapsed_time % 15 == 0:  # Every 15 seconds
+                    remaining = (max_wait_time - elapsed_time) // 60
+                    progress_callback(f"Still waiting for login... ({remaining} minutes remaining)")
+            
+            # Timeout
+            if progress_callback:
+                progress_callback("Login timeout. Please try again.")
+            return False
+            
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"Error during login check: {str(e)}")
+            return False
+    
     def close(self):
         """Close the browser"""
         try:
             if self.driver:
+                # Save cookies before closing
+                self._save_cookies()
                 self.driver.quit()
         except Exception as e:
             raise BrowserError(f"Failed to close browser: {str(e)}")
